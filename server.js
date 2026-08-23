@@ -957,9 +957,9 @@ async function startServer() {
 
           // Send FCM cancel_call push notification in case they are in the background
           try {
-            const recipientUser = await User.findById(receiverId).select('fcmToken');
-            if (recipientUser && recipientUser.fcmToken) {
-              await sendNotificationToUser(recipientUser.fcmToken, {
+            const recipientUser = await User.findById(receiverId).select('fcmToken fcmTokens');
+            if (recipientUser && (recipientUser.fcmToken || (recipientUser.fcmTokens && recipientUser.fcmTokens.length > 0))) {
+              await sendNotificationToUser(recipientUser, {
                 title: 'Call Ended',
                 body: 'Call ended',
                 data: {
@@ -967,7 +967,7 @@ async function startServer() {
                   senderId: callerId,
                 }
               });
-              console.log('🔔 FCM cancel_call push sent to', receiverId);
+              console.log('[FCM CALL] cancel_call push sent to', receiverId);
             }
           } catch (fcmErr) {
             console.error('⚠️ FCM cancel_call push failed:', fcmErr.message);
