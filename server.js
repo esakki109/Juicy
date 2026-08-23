@@ -64,12 +64,12 @@ const corsOptions = {
       'http://localhost:5000',
       'capacitor://localhost',
       'https://juicee-30ie.onrender.com/',
-      'https://juicyapp.in/',
+      'https://juicy-1.onrender.com//',
       'https://juicee-30ie.onrender.com',
       'https://juicy-1.onrender.com/',
       'https://juicy-1.onrender.com',
       'https://juicy.lcind.space',
-      'https://juicyapp.in',
+      'https://juicy-1.onrender.com/',
       process.env.FRONTEND_URL || 'http://localhost:3000'
     ];
 
@@ -154,8 +154,8 @@ async function startServer() {
             'http://localhost:5000',
             'https://juicee-30ie.onrender.com',
             'https://juicy.lcind.space',
-            'https://juicyapp.in',
-            'https://juicyapp.in/',
+            'https://juicy-1.onrender.com/',
+            'https://juicy-1.onrender.com//',
             process.env.FRONTEND_URL || 'http://localhost:3000'
           ];
 
