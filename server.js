@@ -504,8 +504,8 @@ async function startServer() {
           // 🔔 FCM Push: Send notification when receiver is offline/app is in background
           if (!isReceiverBlockedSender) {
             try {
-              const receiverUser = await User.findById(message.receiverId).select('fcmToken username');
-              if (receiverUser && receiverUser.fcmToken) {
+              const receiverUser = await User.findById(message.receiverId).select('fcmToken fcmTokens username');
+              if (receiverUser && (receiverUser.fcmToken || (receiverUser.fcmTokens && receiverUser.fcmTokens.length > 0))) {
                 // Check if receiver is NOT currently connected via socket or in background
                 const receiverOnline = onlineUsersSockets[String(message.receiverId)];
                 const isReceiverInChat = usersInChat[String(message.receiverId)] === String(message.senderId);
@@ -850,9 +850,9 @@ async function startServer() {
           try {
             const [callerUser, recipientUser] = await Promise.all([
               User.findById(callerId).select('username profilePic'),
-              User.findById(receiverId).select('fcmToken username'),
+              User.findById(receiverId).select('fcmToken fcmTokens username'),
             ]);
-            if (recipientUser && recipientUser.fcmToken && callerUser) {
+            if (recipientUser && (recipientUser.fcmToken || (recipientUser.fcmTokens && recipientUser.fcmTokens.length > 0)) && callerUser) {
               await sendCallNotification(recipientUser, callerUser, callType, data.signal);
               console.log('🔔 FCM call push sent to', recipientUser.username || receiverId);
             }

@@ -1,25 +1,115 @@
 /**
  * Push Notification Service - Backend
- * Sends FCM notifications to users
+ * Sends FCM notifications to users across multiple devices
  * 
  * Note: Firebase Admin SDK is initialized in server.js
  * This service uses the already-initialized admin instance
  */
 
 const admin = require('firebase-admin');
+const User = require('../models/User');
 
 /**
- * Send notification to a specific user
+ * Extract deduplicated tokens array and user object reference
+ */
+async function extractTokensAndUser(target) {
+  let tokens = [];
+  let userObj = null;
+
+  if (!target) return { tokens: [], userObj: null };
+
+  if (typeof target === 'string') {
+    // Target is a raw token string
+    tokens = [target];
+  } else if (Array.isArray(target)) {
+    // Target is an array of token strings
+    tokens = target.map(t => (typeof t === 'string' ? t : t?.token)).filter(Boolean);
+  } else if (typeof target === 'object') {
+    userObj = target;
+
+    if (Array.isArray(target.fcmTokens) && target.fcmTokens.length > 0) {
+      tokens = target.fcmTokens.map(t => (typeof t === 'string' ? t : t?.token)).filter(Boolean);
+    }
+    if (target.fcmToken && !tokens.includes(target.fcmToken)) {
+      tokens.push(target.fcmToken);
+    }
+
+    // If no tokens found directly on user object, fetch from database using _id
+    if (tokens.length === 0 && target._id) {
+      try {
+        const dbUser = await User.findById(target._id).select('fcmToken fcmTokens');
+        if (dbUser) {
+          userObj = dbUser;
+          if (Array.isArray(dbUser.fcmTokens) && dbUser.fcmTokens.length > 0) {
+            tokens = dbUser.fcmTokens.map(t => t.token).filter(Boolean);
+          }
+          if (dbUser.fcmToken && !tokens.includes(dbUser.fcmToken)) {
+            tokens.push(dbUser.fcmToken);
+          }
+        }
+      } catch (err) {
+        console.error('❌ Error fetching user tokens from DB:', err.message);
+      }
+    }
+  }
+
+  // Deduplicate and filter out empty tokens
+  const uniqueTokens = [...new Set(tokens)].filter(t => typeof t === 'string' && t.trim().length > 0);
+  return { tokens: uniqueTokens, userObj };
+}
+
+/**
+ * Remove invalid tokens from database for a user
+ */
+async function cleanInvalidTokens(userObj, invalidTokens) {
+  if (!invalidTokens || invalidTokens.length === 0) return;
+  try {
+    if (userObj && typeof userObj.removeFCMToken === 'function') {
+      for (const invToken of invalidTokens) {
+        await userObj.removeFCMToken(invToken);
+      }
+      console.log(`🧹 Removed ${invalidTokens.length} invalid FCM token(s) from user ${userObj._id}`);
+    } else if (userObj && userObj._id) {
+      const dbUser = await User.findById(userObj._id);
+      if (dbUser && typeof dbUser.removeFCMToken === 'function') {
+        for (const invToken of invalidTokens) {
+          await dbUser.removeFCMToken(invToken);
+        }
+        console.log(`🧹 Removed ${invalidTokens.length} invalid FCM token(s) from user ${dbUser._id}`);
+      }
+    } else {
+      // Find any user with these tokens and remove them
+      const users = await User.find({
+        $or: [
+          { 'fcmTokens.token': { $in: invalidTokens } },
+          { fcmToken: { $in: invalidTokens } }
+        ]
+      });
+      for (const u of users) {
+        for (const invToken of invalidTokens) {
+          await u.removeFCMToken(invToken);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('❌ Error cleaning invalid FCM tokens:', err.message);
+  }
+}
+
+/**
+ * Send notification to a specific user or list of tokens
  * Uses DATA-ONLY messages so Android MyFirebaseMessagingService always fires
- * (even in background/killed state) and handles display.
+ * (even in background/killed state) on every registered device.
  * 
- * @param {string} fcmToken - Recipient's FCM token
+ * @param {object|string|Array} recipientUserOrToken - Recipient User object or FCM token(s)
  * @param {object} notification - Notification payload
  */
-async function sendNotificationToUser(fcmToken, notification) {
-  if (!fcmToken) {
-    console.warn('⚠️ No FCM token provided');
-    return;
+async function sendNotificationToUser(recipientUserOrToken, notification) {
+  const { tokens, userObj } = await extractTokensAndUser(recipientUserOrToken);
+
+  if (tokens.length === 0) {
+    console.warn('⚠️ No FCM tokens found for recipient');
+    return null;
   }
 
   // Convert all data values to strings (FCM data payload requires string values)
@@ -35,9 +125,8 @@ async function sendNotificationToUser(fcmToken, notification) {
   if (notification.channelId) dataPayload.channelId = notification.channelId;
   if (notification.imageUrl) dataPayload.imageUrl = notification.imageUrl;
 
-  const message = {
-    // FCM token goes INSIDE the message object (not as separate argument)
-    token: fcmToken,
+  const multicastMessage = {
+    tokens: tokens,
     // DATA-ONLY message — no "notification" key — ensures onMessageReceived fires always
     data: dataPayload,
     android: {
@@ -64,17 +153,37 @@ async function sendNotificationToUser(fcmToken, notification) {
   };
 
   try {
-    const response = await admin.messaging().send(message);
-    console.log('✅ Notification sent:', response);
+    const response = await admin.messaging().sendEachForMulticast(multicastMessage);
+    console.log(`✅ Multicast notification sent to ${tokens.length} device(s): ${response.successCount} success, ${response.failureCount} failed`);
+
+    const invalidTokens = [];
+    if (response.failureCount > 0) {
+      response.responses.forEach((resp, index) => {
+        if (!resp.success && resp.error) {
+          const code = resp.error.code || '';
+          const msg = resp.error.message || '';
+          console.error(`❌ FCM error for token [${tokens[index].substring(0, 10)}...]:`, code, msg);
+
+          if (
+            code === 'messaging/invalid-registration-token' ||
+            code === 'messaging/registration-token-not-registered' ||
+            msg.includes('not registered') ||
+            msg.includes('invalid')
+          ) {
+            invalidTokens.push(tokens[index]);
+          }
+        }
+      });
+    }
+
+    if (invalidTokens.length > 0) {
+      console.warn(`⚠️ Cleaning ${invalidTokens.length} invalid token(s)...`);
+      await cleanInvalidTokens(userObj, invalidTokens);
+    }
+
     return response;
   } catch (error) {
-    console.error('❌ Error sending notification:', error.code, error.message);
-    // If token is invalid/expired, return special marker so caller can clean up
-    if (error.code === 'messaging/invalid-registration-token' ||
-        error.code === 'messaging/registration-token-not-registered') {
-      console.warn('⚠️ FCM token is invalid/expired. Should be removed from database.');
-      return { error: 'invalid_token' };
-    }
+    console.error('❌ Error sending multicast notification:', error.code || error.message);
     return null;
   }
 }
@@ -83,11 +192,6 @@ async function sendNotificationToUser(fcmToken, notification) {
  * Send message notification to recipient
  */
 async function sendMessageNotification(recipientUser, sender, messageText) {
-  if (!recipientUser.fcmToken) {
-    console.warn('⚠️ Recipient has no FCM token');
-    return;
-  }
-
   const notification = {
     title: sender.username,
     body: messageText.substring(0, 100), // Truncate to 100 chars
@@ -102,18 +206,13 @@ async function sendMessageNotification(recipientUser, sender, messageText) {
     imageUrl: sender.profilePic, // Optional: sender's profile pic
   };
 
-  return sendNotificationToUser(recipientUser.fcmToken, notification);
+  return sendNotificationToUser(recipientUser, notification);
 }
 
 /**
  * Send incoming call notification
  */
 async function sendCallNotification(recipientUser, caller, callType = 'audio', signal = null) {
-  if (!recipientUser.fcmToken) {
-    console.warn('⚠️ Recipient has no FCM token');
-    return;
-  }
-
   const notification = {
     title: `${caller.username} is calling...`,
     body: callType === 'video' ? 'Video call' : 'Voice call',
@@ -131,18 +230,13 @@ async function sendCallNotification(recipientUser, caller, callType = 'audio', s
     channelId: 'call_notifications',
   };
 
-  return sendNotificationToUser(recipientUser.fcmToken, notification);
+  return sendNotificationToUser(recipientUser, notification);
 }
 
 /**
  * Send friend request notification
  */
 async function sendFriendRequestNotification(recipientUser, requester) {
-  if (!recipientUser.fcmToken) {
-    console.warn('⚠️ Recipient has no FCM token');
-    return;
-  }
-
   const notification = {
     title: 'Friend Request',
     body: `${requester.username} sent you a friend request`,
@@ -155,7 +249,7 @@ async function sendFriendRequestNotification(recipientUser, requester) {
     channelId: 'friend_requests',
   };
 
-  return sendNotificationToUser(recipientUser.fcmToken, notification);
+  return sendNotificationToUser(recipientUser, notification);
 }
 
 /**

@@ -57,6 +57,42 @@ const userSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
+// Helper method to add/update an FCM token in the user's fcmTokens array
+userSchema.methods.addFCMToken = function (token, device = 'unknown') {
+  if (!token) return Promise.resolve(this);
+  if (!this.fcmTokens) {
+    this.fcmTokens = [];
+  }
+
+  const existingIndex = this.fcmTokens.findIndex(t => t.token === token);
+  if (existingIndex > -1) {
+    this.fcmTokens[existingIndex].createdAt = new Date();
+    if (device && device !== 'unknown') {
+      this.fcmTokens[existingIndex].device = device;
+    }
+  } else {
+    this.fcmTokens.push({ token, device: device || 'unknown', createdAt: new Date() });
+  }
+
+  // Set latest token for backward compatibility
+  this.fcmToken = token;
+  return this.save();
+};
+
+// Helper method to remove an FCM token from the user's fcmTokens array
+userSchema.methods.removeFCMToken = function (token) {
+  if (!token) return Promise.resolve(this);
+  if (this.fcmTokens) {
+    this.fcmTokens = this.fcmTokens.filter(t => t.token !== token);
+  }
+  if (this.fcmToken === token) {
+    this.fcmToken = (this.fcmTokens && this.fcmTokens.length > 0)
+      ? this.fcmTokens[this.fcmTokens.length - 1].token
+      : null;
+  }
+  return this.save();
+};
+
 module.exports = mongoose.model('User', userSchema);
 {/*const mongoose = require('mongoose');
 

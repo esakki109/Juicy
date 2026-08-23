@@ -35,27 +35,27 @@ const isBlocked = async (user1Id, user2Id) => {
 router.post('/api/user/:userId/fcm-token', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { fcmToken } = req.body;
+    const fcmToken = req.body.fcmToken || req.body.token;
+    const device = req.body.device || 'unknown';
 
     if (!fcmToken) {
       return res.status(400).json({ error: 'FCM token required' });
     }
 
-    // Update user with FCM token
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { fcmToken },
-      { new: true }
-    );
-
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
+
+    // Add token using schema method (handles deduplication and backward compatibility)
+    await user.addFCMToken(fcmToken, device);
 
     res.json({
       success: true,
       message: 'FCM token saved',
       fcmToken: user.fcmToken,
+      fcmTokensCount: user.fcmTokens ? user.fcmTokens.length : 0,
+      fcmTokens: user.fcmTokens || [],
     });
   } catch (error) {
     console.error('Error saving FCM token:', error);
@@ -92,8 +92,8 @@ router.post('/api/notifications/send-message', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Only send notification if recipient has FCM token
-    if (recipient.fcmToken) {
+    // Send notification if recipient has any registered FCM token
+    if (recipient.fcmToken || (recipient.fcmTokens && recipient.fcmTokens.length > 0)) {
       await sendMessageNotification(recipient, sender, messageText);
     }
 
@@ -133,7 +133,7 @@ router.post('/api/notifications/send-call', async (req, res) => {
     }
 
     // Send call notification
-    if (recipient.fcmToken) {
+    if (recipient.fcmToken || (recipient.fcmTokens && recipient.fcmTokens.length > 0)) {
       await sendCallNotification(recipient, caller, callType || 'audio', signal);
     }
 
@@ -173,7 +173,7 @@ router.post('/api/notifications/send-friend-request', async (req, res) => {
     }
 
     // Send friend request notification
-    if (recipient.fcmToken) {
+    if (recipient.fcmToken || (recipient.fcmTokens && recipient.fcmTokens.length > 0)) {
       await sendFriendRequestNotification(recipient, requester);
     }
 
