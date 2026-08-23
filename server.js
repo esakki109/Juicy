@@ -501,18 +501,22 @@ async function startServer() {
             io.to(String(message.senderId)).emit('receive_message', emitPayload);
           }
 
-          // 🔔 FCM Push: Send notification when receiver is offline/app is in background
+          // 🔔 FCM Push: Send notification when receiver is not actively in this chat
+          // FCM is always sent unless receiver is actively viewing THIS conversation.
+          // This ensures background/terminated app delivery without relying on the
+          // fragile app_state emit (which may not fire before Android suspends JS).
           if (!isReceiverBlockedSender) {
             try {
               const receiverUser = await User.findById(message.receiverId).select('fcmToken fcmTokens username');
               if (receiverUser && (receiverUser.fcmToken || (receiverUser.fcmTokens && receiverUser.fcmTokens.length > 0))) {
-                // Check if receiver is NOT currently connected via socket or in background
-                const receiverOnline = onlineUsersSockets[String(message.receiverId)];
-                const isReceiverInChat = usersInChat[String(message.receiverId)] === String(message.senderId);
-                const isReceiverBackground = userAppStates[String(message.receiverId)] === 'background';
+                // Only skip FCM if the receiver is ACTIVELY in this specific chat (real-time covers it)
+                const isReceiverActivelyInThisChat =
+                  usersInChat[String(message.receiverId)] === String(message.senderId) &&
+                  onlineUsersSockets[String(message.receiverId)] &&
+                  onlineUsersSockets[String(message.receiverId)].size > 0 &&
+                  userAppStates[String(message.receiverId)] !== 'background';
 
-                // Send FCM push if receiver is offline, not actively chatting with sender, OR in background
-                if (!receiverOnline || receiverOnline.size === 0 || !isReceiverInChat || isReceiverBackground) {
+                if (!isReceiverActivelyInThisChat) {
                   const senderUser = await User.findById(message.senderId).select('username profilePic');
                   if (senderUser) {
                     const msgPreview = message.type === 'image' ? '📷 Photo'
@@ -524,12 +528,17 @@ async function startServer() {
                                 : (message.text || 'New message').substring(0, 100);
 
                     await sendMessageNotification(receiverUser, senderUser, msgPreview);
-                    console.log('🔔 FCM push sent to', receiverUser.username || message.receiverId);
+                    console.log('[FCM MESSAGE] Push sent to', receiverUser.username || message.receiverId,
+                      '| receiver in chat:', usersInChat[String(message.receiverId)] === String(message.senderId),
+                      '| online sockets:', onlineUsersSockets[String(message.receiverId)]?.size || 0,
+                      '| app_state:', userAppStates[String(message.receiverId)] || 'unknown');
                   }
+                } else {
+                  console.log('[FCM MESSAGE] Skipped — receiver is actively in this chat');
                 }
               }
             } catch (fcmErr) {
-              console.error('⚠️ FCM push failed (message still delivered via socket):', fcmErr.message);
+              console.error('[FCM MESSAGE] Push failed (message still delivered via socket):', fcmErr.message);
             }
           }
 

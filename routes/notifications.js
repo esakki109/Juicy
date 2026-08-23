@@ -47,8 +47,12 @@ router.post('/api/user/:userId/fcm-token', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    console.log(`[FCM] Token received from device for user: ${userId} (device: ${device}, token prefix: ${fcmToken.substring(0, 8)}...)`);
+
     // Add token using schema method (handles deduplication and backward compatibility)
     await user.addFCMToken(fcmToken, device);
+
+    console.log(`[FCM] Token saved for user: ${userId} | total tokens: ${user.fcmTokens ? user.fcmTokens.length : 0}`);
 
     res.json({
       success: true,
@@ -58,7 +62,7 @@ router.post('/api/user/:userId/fcm-token', async (req, res) => {
       fcmTokens: user.fcmTokens || [],
     });
   } catch (error) {
-    console.error('Error saving FCM token:', error);
+    console.error('[FCM] Error saving FCM token:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -214,6 +218,76 @@ router.post('/api/notifications/reject-call', async (req, res) => {
     res.json({ success: true, message: 'Call rejected' });
   } catch (error) {
     console.error('Error rejecting call:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * [DEBUG] Test FCM push directly to a user by userId
+ * POST /api/notifications/test-push
+ * Body: { userId, type }  — type: 'message' | 'incoming_call'
+ * Use this to verify the full FCM delivery path (Admin SDK → device → MyFirebaseMessagingService)
+ * without sending a real message.
+ */
+router.post('/api/notifications/test-push', async (req, res) => {
+  try {
+    const { userId, type = 'message' } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const user = await User.findById(userId).select('fcmToken fcmTokens username');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.fcmToken && !(user.fcmTokens && user.fcmTokens.length > 0)) {
+      return res.status(400).json({
+        error: 'No FCM tokens registered for this user',
+        hint: 'Open the app on the device and wait for the token to be saved'
+      });
+    }
+
+    const { sendNotificationToUser } = require('../services/pushNotificationService');
+
+    const notification = type === 'incoming_call'
+      ? {
+          title: 'Test Caller is calling...',
+          body: 'Voice call',
+          data: {
+            type: 'incoming_call',
+            callType: 'audio',
+            senderId: userId,
+            senderName: 'Test Caller',
+            callId: `test_call_${Date.now()}`,
+            channelId: 'call_notifications',
+          }
+        }
+      : {
+          title: 'Test Message',
+          body: '[FCM TEST] If you see this in background, FCM is working!',
+          data: {
+            type: 'message',
+            senderId: userId,
+            senderName: user.username || 'Test',
+            conversationId: `test_${Date.now()}`,
+            channelId: 'chat_messages',
+          }
+        };
+
+    const result = await sendNotificationToUser(user, notification);
+    console.log(`[FCM TEST] Sent ${type} push to ${user.username || userId}`);
+
+    res.json({
+      success: true,
+      type,
+      username: user.username,
+      tokenCount: (user.fcmTokens ? user.fcmTokens.length : 0) + (user.fcmToken ? 1 : 0),
+      fcmResult: result ? { successCount: result.successCount, failureCount: result.failureCount } : null,
+      message: 'FCM test push sent — check your device notification shade'
+    });
+  } catch (error) {
+    console.error('[FCM TEST] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });

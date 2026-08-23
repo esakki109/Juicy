@@ -153,8 +153,9 @@ async function sendNotificationToUser(recipientUserOrToken, notification) {
   };
 
   try {
+    console.log(`[FCM] Sending notification to ${tokens.length} token(s) | type: ${dataPayload.type || 'unknown'} | title: ${notification.title}`);
     const response = await admin.messaging().sendEachForMulticast(multicastMessage);
-    console.log(`✅ Multicast notification sent to ${tokens.length} device(s): ${response.successCount} success, ${response.failureCount} failed`);
+    console.log(`[FCM] Firebase send result: ${response.successCount} success, ${response.failureCount} failed (of ${tokens.length} tokens)`);
 
     const invalidTokens = [];
     if (response.failureCount > 0) {
@@ -162,7 +163,7 @@ async function sendNotificationToUser(recipientUserOrToken, notification) {
         if (!resp.success && resp.error) {
           const code = resp.error.code || '';
           const msg = resp.error.message || '';
-          console.error(`❌ FCM error for token [${tokens[index].substring(0, 10)}...]:`, code, msg);
+          console.error(`[FCM] Error for token [${tokens[index].substring(0, 8)}...]:`, code, msg);
 
           if (
             code === 'messaging/invalid-registration-token' ||
@@ -177,13 +178,13 @@ async function sendNotificationToUser(recipientUserOrToken, notification) {
     }
 
     if (invalidTokens.length > 0) {
-      console.warn(`⚠️ Cleaning ${invalidTokens.length} invalid token(s)...`);
+      console.warn(`[FCM] Cleaning ${invalidTokens.length} invalid token(s)...`);
       await cleanInvalidTokens(userObj, invalidTokens);
     }
 
     return response;
   } catch (error) {
-    console.error('❌ Error sending multicast notification:', error.code || error.message);
+    console.error('[FCM] Error sending multicast notification:', error.code || error.message);
     return null;
   }
 }
