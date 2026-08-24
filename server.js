@@ -310,7 +310,7 @@ async function startServer() {
           // 📡 Auto-deliver call signal if there is a pending active call targeting this user
           for (const [cId, callDetails] of Object.entries(activeOutgoingCalls)) {
             if (String(callDetails.targetUserId) === String(userId)) {
-              if (Date.now() - callDetails.timestamp < 35000) {
+              if (Date.now() - callDetails.timestamp < 90000) { // 90s — enough time to unlock screen and tap Answer
                 console.log(`📡 Auto-delivering cached incoming call from ${cId} to ${userId}`);
                 socket.emit('incomingCall', {
                   from: callDetails.from,
