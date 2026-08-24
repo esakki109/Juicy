@@ -125,6 +125,23 @@ async function sendNotificationToUser(recipientUserOrToken, notification) {
   if (notification.channelId) dataPayload.channelId = notification.channelId;
   if (notification.imageUrl) dataPayload.imageUrl = notification.imageUrl;
 
+  // Safeguard: FCM has a strict 4096-byte payload limit. Ensure dataPayload stays well within limit.
+  try {
+    let payloadSize = Buffer.byteLength(JSON.stringify(dataPayload), 'utf8');
+    if (payloadSize > 3500) {
+      console.warn(`⚠️ [FCM] dataPayload size (${payloadSize} bytes) exceeds safety threshold. Trimming non-essential fields.`);
+      if (dataPayload.signal) dataPayload.signal = '';
+      if (dataPayload.imageUrl && Buffer.byteLength(JSON.stringify(dataPayload), 'utf8') > 3500) {
+        delete dataPayload.imageUrl;
+      }
+      if (dataPayload.callerImage && Buffer.byteLength(JSON.stringify(dataPayload), 'utf8') > 3500) {
+        delete dataPayload.callerImage;
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ [FCM] Payload size check warning:', e.message);
+  }
+
   const multicastMessage = {
     tokens: tokens,
     // DATA-ONLY message — no "notification" key — ensures onMessageReceived fires always
@@ -226,7 +243,10 @@ async function sendCallNotification(recipientUser, caller, callType = 'audio', s
       callId: `call_${Date.now()}`,
       timestamp: new Date().toISOString(),
       callerImage: caller.profilePic || '',
-      signal: signal ? (typeof signal === 'string' ? signal : JSON.stringify(signal)) : '',
+      // Note: WebRTC SDP signals for video calls exceed FCM's 4KB payload limit.
+      // Signaling is delivered in real-time over Socket.IO (activeOutgoingCalls),
+      // so signal is kept empty in FCM push to ensure 100% reliable delivery for video calls.
+      signal: '',
     },
     channelId: 'call_notifications',
   };
