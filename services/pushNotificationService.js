@@ -130,9 +130,9 @@ async function sendNotificationToUser(recipientUserOrToken, notification) {
     // DATA-ONLY message — no "notification" key — ensures onMessageReceived fires always
     data: dataPayload,
     android: {
-      // HIGH priority wakes the device from Doze mode (like WhatsApp)
+      // HIGH priority wakes the device from Doze mode (like WhatsApp) with ttl: 0 for immediate delivery
       priority: 'high',
-      ttl: 86400000, // 24 hours in milliseconds
+      ttl: 0,
     },
     apns: {
       headers: {
@@ -272,7 +272,7 @@ async function sendTopicNotification(topic, notification) {
     topic: topic,
     android: {
       priority: 'high',
-      ttl: 86400000,
+      ttl: 0,
     },
   };
 
