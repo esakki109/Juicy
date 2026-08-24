@@ -214,6 +214,23 @@ async function sendMessageNotification(recipientUser, sender, messageText) {
  * Send incoming call notification
  */
 async function sendCallNotification(recipientUser, caller, callType = 'audio', signal = null) {
+  let signalStr = '';
+  if (signal) {
+    try {
+      const raw = typeof signal === 'string' ? signal : JSON.stringify(signal);
+      // FCM data payload limit is 4096 bytes total. 
+      // Video SDP offers are often 4KB-6KB which causes Firebase to drop the notification entirely!
+      // If signal is <= 2000 bytes we include it, otherwise live socket delivers it on app launch.
+      if (raw.length <= 2000) {
+        signalStr = raw;
+      } else {
+        console.log(`ℹ️ [FCM] Call signal is large (${raw.length} bytes) for ${callType} call - omitting from FCM push to prevent 4KB overflow. Live socket will deliver it.`);
+      }
+    } catch (e) {
+      console.warn('⚠️ [FCM] Could not serialize call signal:', e.message);
+    }
+  }
+
   const notification = {
     title: `${caller.username} is calling...`,
     body: callType === 'video' ? 'Video call' : 'Voice call',
@@ -226,7 +243,7 @@ async function sendCallNotification(recipientUser, caller, callType = 'audio', s
       callId: `call_${Date.now()}`,
       timestamp: new Date().toISOString(),
       callerImage: caller.profilePic || '',
-      signal: signal ? (typeof signal === 'string' ? signal : JSON.stringify(signal)) : '',
+      signal: signalStr,
     },
     channelId: 'call_notifications',
   };
