@@ -292,4 +292,98 @@ router.post('/api/notifications/test-push', async (req, res) => {
   }
 });
 
+/**
+ * Send message from native Android notification inline reply (RemoteInput)
+ * POST /api/messages/send-from-notification
+ * Body: { senderId, receiverId, text, conversationId }
+ */
+router.post('/api/messages/send-from-notification', async (req, res) => {
+  try {
+    const { senderId, receiverId, text, conversationId } = req.body;
+
+    if (!senderId || !receiverId || !text || !text.trim()) {
+      return res.status(400).json({ error: 'senderId, receiverId, and non-empty text are required' });
+    }
+
+    const trimmedText = text.trim();
+
+    // Fetch sender & recipient details
+    const [sender, recipient] = await Promise.all([
+      User.findById(senderId).select('username profilePic blockedUsers'),
+      User.findById(receiverId).select('username profilePic fcmToken fcmTokens blockedUsers')
+    ]);
+
+    if (!sender || !recipient) {
+      return res.status(404).json({ error: 'Sender or receiver user not found' });
+    }
+
+    // Check block list status
+    const isSenderBlockedReceiver = await isBlocked(senderId, receiverId);
+
+    const roomId = conversationId || [String(senderId), String(receiverId)].sort().join('-');
+
+    // Create and save Message document to MongoDB Atlas
+    const msgDoc = new Message({
+      senderId: sender._id,
+      senderUsername: sender.username,
+      receiverId: recipient._id,
+      receiverUsername: recipient.username,
+      roomId: roomId,
+      text: trimmedText,
+      type: 'text',
+      timestamp: new Date(),
+      delivered: false,
+      blocked: isSenderBlockedReceiver
+    });
+
+    await msgDoc.save();
+    console.log('[JuicyReply Backend] Message saved to MongoDB:', { id: msgDoc._id, sender: sender.username, receiver: recipient.username });
+
+    // Broadcast via Socket.IO if available
+    const io = req.app.get('io');
+    if (io) {
+      const emitPayload = {
+        _id: msgDoc._id,
+        id: msgDoc._id,
+        senderId: String(sender._id),
+        senderUsername: sender.username,
+        receiverId: String(recipient._id),
+        receiverUsername: recipient.username,
+        roomId: roomId,
+        text: trimmedText,
+        type: 'text',
+        timestamp: msgDoc.timestamp
+      };
+
+      if (isSenderBlockedReceiver) {
+        io.to(String(sender._id)).emit('receive_message', emitPayload);
+      } else {
+        io.to(roomId).emit('receive_message', emitPayload);
+        io.to(String(recipient._id)).emit('receive_message', emitPayload);
+        io.to(String(sender._id)).emit('receive_message', emitPayload);
+      }
+      console.log('[JuicyReply Backend] Emitted receive_message via Socket.IO');
+    }
+
+    // Send FCM Push Notification to recipient if not blocked
+    if (!isSenderBlockedReceiver && (recipient.fcmToken || (recipient.fcmTokens && recipient.fcmTokens.length > 0))) {
+      try {
+        await sendMessageNotification(recipient, sender, trimmedText);
+        console.log('[JuicyReply Backend] FCM push dispatched to recipient:', recipient.username);
+      } catch (fcmErr) {
+        console.error('[JuicyReply Backend] FCM dispatch warning:', fcmErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      messageId: msgDoc._id,
+      message: 'Notification reply processed and persisted'
+    });
+  } catch (error) {
+    console.error('[JuicyReply Backend] Error handling send-from-notification:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;
